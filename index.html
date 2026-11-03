@@ -209,15 +209,26 @@ function applyLocale() {
   save();
 }
 
-$('country').onchange=()=>{data.country=$('country').value;applyLocale();refresh();usd();loadCurrencyRates();};
+$('country').onchange=()=>{data.country=$('country').value;applyLocale();refresh();lastUsdRate=null;usd();loadCurrencyRates();};
 $('exportCsv').onclick=()=>{let rows=[['Fecha','Tipo','Valor','Categoría','Descripción'],...data.moves.map(m=>[m.date,m.type,m.amount,m.category,m.desc])];let csv=rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'}));a.download='mis-movimientos.csv';a.click();URL.revokeObjectURL(a.href)};
 $('clearData').onclick=()=>{if(confirm(translateText('¿Seguro que quieres borrar todos tus datos? Esta acción no se puede deshacer.',countries[data.country].lang))){localStorage.removeItem('mpi_data');data={...defaults};location.reload()}};
 const keys=['7','8','9','÷','4','5','6','×','1','2','3','−','0','.','C','+','(',')','=','⌫'];$('calcKeys').innerHTML=keys.map(k=>`<button class="secondary" data-key="${k}" style="padding:15px 5px">${k}</button>`).join('');$('calcKeys').onclick=e=>{let k=e.target.dataset.key;if(!k)return;try{if(k==='C')calc='0';else if(k==='⌫')calc=calc.slice(0,-1)||'0';else if(k==='='){let expr=calc.replace(/×/g,'*').replace(/÷/g,'/').replace(/−/g,'-');if(!/^[0-9+\-*/(). ]+$/.test(expr))throw 0;let result=Function('"use strict";return ('+expr+')')();calc=Number.isFinite(result)?String(result):'Error'}else calc=calc==='0'?k:calc+k}catch{calc='Error'}$('calcDisplay').value=calc};
 $('receiptFile').onchange=e=>{let f=e.target.files[0];if(!f)return;$('receiptPreview').src=URL.createObjectURL(f);$('receiptPreview').classList.remove('hidden');$('scanNote').textContent='Foto cargada. Revisa el recibo y registra el valor manualmente en Resumen.'};
-async function usd(){let target=countries[data.country].currency;if(target==='USD'){$('usdRate').textContent='1 USD = 1 USD';$('usdUpdated').textContent='Moneda local: dólar estadounidense.';return} $('usdRate').textContent='Consultando…';try{let r=await fetch(`https://api.frankfurter.app/latest?from=USD&to=${target}`);if(!r.ok)throw 0;let j=await r.json();$('usdRate').textContent=`1 USD = ${new Intl.NumberFormat(countries[data.country].locale,{style:'currency',currency:target,maximumFractionDigits:2}).format(j.rates[target])}`;$('usdUpdated').textContent='Referencia de mercado · '+j.date+' · Puede diferir de la tasa oficial local.'}catch{$('usdRate').textContent='Cotización no disponible';$('usdUpdated').textContent='Comprueba tu conexión e inténtalo de nuevo.'}}
+let usdStream=null, usdTimer=null, lastUsdRate=null;
+function showUsd(rate, stamp, source){const target=countries[data.country].currency;lastUsdRate=rate;$('usdRate').textContent=`1 USD = ${new Intl.NumberFormat(countries[data.country].locale,{style:'currency',currency:target,maximumFractionDigits:target==='COP'?0:4}).format(rate)}`;$('usdUpdated').textContent=`${source} · Actualizado: ${stamp}`;}
+async function usd(){const target=countries[data.country].currency;$('usdRate').textContent='Consultando…';if(usdStream){usdStream.close();usdStream=null;}try{if(target==='USD'){showUsd(1,new Date().toLocaleString(countries[data.country].locale),'Paridad');return;}
+ if(target==='COP'){
+  const r=await fetch('https://api.dolarencolombia.co/v1/spot/latest',{cache:'no-store'});if(!r.ok)throw Error('spot');const j=await r.json();const rate=Number(j.precio);if(!Number.isFinite(rate)||rate<=0)throw Error('data');showUsd(rate,j.ts?new Date(j.ts).toLocaleString('es-CO'):'ahora',`Cotización intradía · ${j.fuente||'Dólar en Colombia'}`);
+  try{usdStream=new EventSource('https://api.dolarencolombia.co/v1/stream');usdStream.addEventListener('tick',e=>{try{const q=JSON.parse(e.data);if(Number(q.precio)>0)showUsd(Number(q.precio),q.ts?new Date(q.ts).toLocaleString('es-CO'):new Date().toLocaleTimeString('es-CO'),`Cotización en vivo · ${q.fuente||'Dólar en Colombia'}`)}catch(_){}})}catch(_){}
+ }else{
+  const r=await fetch(`https://api.frankfurter.dev/v2/rate/usd/${target.toLowerCase()}`,{cache:'no-store'});if(!r.ok)throw Error('rate');const j=await r.json();const rate=Number(j.rate);if(!Number.isFinite(rate)||rate<=0)throw Error('data');showUsd(rate,j.date||new Date().toLocaleDateString(countries[data.country].locale),'Referencia diaria de mercado');
+ }
+}catch(e){try{const r=await fetch(`https://api.frankfurter.dev/v2/rate/usd/${target.toLowerCase()}`,{cache:'no-store'});if(!r.ok)throw Error();const j=await r.json();showUsd(Number(j.rate),j.date||'fecha no disponible','Referencia diaria de respaldo');}catch(_){if(lastUsdRate){$('usdRate').textContent=`1 USD = ${new Intl.NumberFormat(countries[data.country].locale,{style:'currency',currency:target,maximumFractionDigits:4}).format(lastUsdRate)}`;$('usdUpdated').textContent='No se pudo actualizar; se conserva la última cotización.';}else{$('usdRate').textContent='Cotización no disponible';$('usdUpdated').textContent='Revisa tu conexión e inténtalo de nuevo.';}}}}
 $('refreshUsd').onclick=usd;
 $('installHelp').onclick=()=>alert('Para crear un acceso directo: abre este archivo con Chrome, toca ⋮ y elige “Añadir a pantalla principal” o “Instalar aplicación”, si aparece. Si lo abres como archivo local, esa opción puede no estar disponible; puedes guardarlo en una web de alojamiento para instalarlo como app.');
 applyLocale();refresh();usd();loadCurrencyRates();
+if(usdTimer)clearInterval(usdTimer);usdTimer=setInterval(usd,60000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)usd()});
 
 const localeObserver = new MutationObserver(records => {
   if (countries[data.country].lang === 'es') return;
