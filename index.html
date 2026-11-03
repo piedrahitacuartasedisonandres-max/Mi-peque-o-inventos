@@ -62,7 +62,13 @@ DE:{name:'Deutschland',currency:'EUR',locale:'de-DE',lang:'de',flag:'🇩🇪'}
 };
 const words={es:{subtitle:'Tu dinero, claro y bajo control.',home:'Resumen',calendar:'Calendario de ingresos',moves:'Movimientos',tools:'Herramientas',settings:'Configuración'},en:{subtitle:'Your money, clear and under control.',home:'Overview',calendar:'Income calendar',moves:'Transactions',tools:'Tools',settings:'Settings'},pt:{subtitle:'Seu dinheiro, claro e sob controle.',home:'Resumo',calendar:'Calendário de renda',moves:'Movimentos',tools:'Ferramentas',settings:'Configurações'}};
 function save(){localStorage.setItem('mpi_data',JSON.stringify(data));}
-function currency(n){return new Intl.NumberFormat(countries[data.country].locale,{style:'currency',currency:countries[data.country].currency,maximumFractionDigits:0}).format(n||0)}
+// Todos los registros se conservan internamente en COP; solo cambia la presentación.
+let copRates={COP:1}; let fxDate='';
+function rateToLocal(){return Number(copRates[countries[data.country].currency]||1)}
+function toLocal(n){return Number(n||0)*rateToLocal()}
+function toCOP(n){return Number(n||0)/rateToLocal()}
+function currency(n){return new Intl.NumberFormat(countries[data.country].locale,{style:'currency',currency:countries[data.country].currency,maximumFractionDigits:countries[data.country].currency==='COP'?0:2}).format(toLocal(n))}
+async function loadCurrencyRates(){try{const r=await fetch('https://open.er-api.com/v6/latest/COP');if(!r.ok)throw Error('rate');const j=await r.json();if(j.result!=='success'||!j.rates)throw Error('rate');copRates=j.rates;fxDate=j.time_last_update_utc||'';localStorage.setItem('mpi_fx_cache',JSON.stringify({rates:copRates,date:fxDate}));$('dailyIncome').value=data.daily?toLocal(data.daily).toFixed(2):'';refresh();}catch(e){const cached=JSON.parse(localStorage.getItem('mpi_fx_cache')||'null');if(cached?.rates){copRates=cached.rates;fxDate=cached.date||'';$('dailyIncome').value=data.daily?toLocal(data.daily).toFixed(2):'';refresh();}else{$('localeNote').textContent+=' · No se pudo actualizar la tasa; se muestra el valor base.'}}}
 function dateObj(s){let [y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)}
 function iso(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 function isScheduled(s){let d=dateObj(s);return data.days.includes(d.getDay())&&!data.off.includes(s)&&s>=data.start&&data.daily>0}
@@ -79,14 +85,14 @@ function renderCalendar(){let y=calDate.getFullYear(),m=calDate.getMonth();$('ca
 function showPage(p){document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===p));document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.page===p));}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>showPage(b.dataset.page));document.querySelectorAll('[data-goto]').forEach(b=>b.onclick=()=>showPage(b.dataset.goto));
 $('moveDate').value=todayISO();$('offDate').value=todayISO();
-$('addMove').onclick=()=>{let amount=Number($('moveAmount').value);if(!amount||amount<=0){alert(translateText('Escribe un valor válido.',countries[data.country].lang));return}data.moves.push({type:$('moveType').value,amount,date:$('moveDate').value||todayISO(),category:$('moveCategory').value,desc:$('moveDesc').value});save();$('moveAmount').value='';$('moveDesc').value='';refresh();};
+$('addMove').onclick=()=>{let amount=Number($('moveAmount').value);if(!amount||amount<=0){alert(translateText('Escribe un valor válido.',countries[data.country].lang));return}data.moves.push({type:$('moveType').value,amount:toCOP(amount),date:$('moveDate').value||todayISO(),category:$('moveCategory').value,desc:$('moveDesc').value});save();$('moveAmount').value='';$('moveDesc').value='';refresh();};
 $('allMoves').onclick=e=>{let b=e.target.closest('[data-del]');if(b){let sorted=[...data.moves].sort((a,b)=>b.date.localeCompare(a.date));let target=sorted[Number(b.dataset.del)];data.moves.splice(data.moves.indexOf(target),1);save();refresh();}};
 $('prevMonth').onclick=()=>{calDate.setMonth(calDate.getMonth()-1);renderCalendar()};$('nextMonth').onclick=()=>{calDate.setMonth(calDate.getMonth()+1);renderCalendar()};
 $('calendarGrid').onclick=e=>{let b=e.target.closest('[data-day]');if(!b)return;let s=b.dataset.day;data.off=data.off.includes(s)?data.off.filter(x=>x!==s):[...data.off,s];save();refresh()};
 $('toggleOff').onclick=()=>{let s=$('offDate').value;if(!s)return;data.off=data.off.includes(s)?data.off.filter(x=>x!==s):[...data.off,s];save();refresh()};
 $('country').value=data.country;$('dailyIncome').value=data.daily;$('startDate').value=data.start;$('hours').value=data.hours;
 const dayNames=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];$('weekdays').innerHTML=dayNames.map((n,i)=>`<label style="margin:0;display:flex;gap:4px;align-items:center"><input type="checkbox" value="${(i+1)%7}" style="width:auto" ${data.days.includes((i+1)%7)?'checked':''}>${n}</label>`).join('');
-$('saveSettings').onclick=()=>{data.country=$('country').value;data.daily=Math.max(0,Number($('dailyIncome').value));data.start=$('startDate').value||todayISO();data.hours=Math.max(1,Math.min(24,Number($('hours').value)||8));data.days=[...$('weekdays').querySelectorAll('input:checked')].map(x=>Number(x.value));save();applyLocale();refresh();alert(translateText('Configuración guardada.',countries[data.country].lang));};
+$('saveSettings').onclick=()=>{data.country=$('country').value;data.daily=Math.max(0,toCOP(Number($('dailyIncome').value)));data.start=$('startDate').value||todayISO();data.hours=Math.max(1,Math.min(24,Number($('hours').value)||8));data.days=[...$('weekdays').querySelectorAll('input:checked')].map(x=>Number(x.value));save();applyLocale();refresh();alert(translateText('Configuración guardada.',countries[data.country].lang));};
 
 const translations = {
 en: {' por cada día programado · desde ':' per scheduled day · since ',' por cada día programado':' per scheduled day','Fecha':'Date','Tipo':'Type','Valor':'Amount','Categoría':'Category','Descripción':'Description','¿Seguro que quieres borrar todos tus datos? Esta acción no se puede deshacer.':'Are you sure you want to delete all your data? This action cannot be undone.','Eliminar':'Delete','Días':'Days','L':'M','M':'T','X':'W','J':'T','V':'F','S':'S',"Lun":"Mon","Mar":"Tue","Mié":"Wed","Jue":"Thu","Vie":"Fri","Sáb":"Sat","Dom":"Sun","Días":"Days",
@@ -203,29 +209,7 @@ function applyLocale() {
   save();
 }
 
-$('country').onchange=()=>{data.country=$('country').value;applyLocale();refresh();usd();
-
-const localeObserver = new MutationObserver(records => {
-  if (countries[data.country].lang === 'es') return;
-  records.forEach(record => {
-    record.addedNodes.forEach(node => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        if (node.nodeValue.trim() && node.__spanishText === undefined) node.__spanishText = node.nodeValue;
-        if (node.__spanishText !== undefined) node.nodeValue = translateText(node.__spanishText, countries[data.country].lang);
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
-        let child;
-        while ((child = walker.nextNode())) {
-          if (!child.nodeValue.trim()) continue;
-          if (child.__spanishText === undefined) child.__spanishText = child.nodeValue;
-          child.nodeValue = translateText(child.__spanishText, countries[data.country].lang);
-        }
-      }
-    });
-  });
-});
-localeObserver.observe(document.body,{childList:true,subtree:true});
-};
+$('country').onchange=()=>{data.country=$('country').value;applyLocale();refresh();usd();loadCurrencyRates();};
 $('exportCsv').onclick=()=>{let rows=[['Fecha','Tipo','Valor','Categoría','Descripción'],...data.moves.map(m=>[m.date,m.type,m.amount,m.category,m.desc])];let csv=rows.map(r=>r.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\n');let a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'}));a.download='mis-movimientos.csv';a.click();URL.revokeObjectURL(a.href)};
 $('clearData').onclick=()=>{if(confirm(translateText('¿Seguro que quieres borrar todos tus datos? Esta acción no se puede deshacer.',countries[data.country].lang))){localStorage.removeItem('mpi_data');data={...defaults};location.reload()}};
 const keys=['7','8','9','÷','4','5','6','×','1','2','3','−','0','.','C','+','(',')','=','⌫'];$('calcKeys').innerHTML=keys.map(k=>`<button class="secondary" data-key="${k}" style="padding:15px 5px">${k}</button>`).join('');$('calcKeys').onclick=e=>{let k=e.target.dataset.key;if(!k)return;try{if(k==='C')calc='0';else if(k==='⌫')calc=calc.slice(0,-1)||'0';else if(k==='='){let expr=calc.replace(/×/g,'*').replace(/÷/g,'/').replace(/−/g,'-');if(!/^[0-9+\-*/(). ]+$/.test(expr))throw 0;let result=Function('"use strict";return ('+expr+')')();calc=Number.isFinite(result)?String(result):'Error'}else calc=calc==='0'?k:calc+k}catch{calc='Error'}$('calcDisplay').value=calc};
@@ -233,7 +217,7 @@ $('receiptFile').onchange=e=>{let f=e.target.files[0];if(!f)return;$('receiptPre
 async function usd(){let target=countries[data.country].currency;if(target==='USD'){$('usdRate').textContent='1 USD = 1 USD';$('usdUpdated').textContent='Moneda local: dólar estadounidense.';return} $('usdRate').textContent='Consultando…';try{let r=await fetch(`https://api.frankfurter.app/latest?from=USD&to=${target}`);if(!r.ok)throw 0;let j=await r.json();$('usdRate').textContent=`1 USD = ${new Intl.NumberFormat(countries[data.country].locale,{style:'currency',currency:target,maximumFractionDigits:2}).format(j.rates[target])}`;$('usdUpdated').textContent='Referencia de mercado · '+j.date+' · Puede diferir de la tasa oficial local.'}catch{$('usdRate').textContent='Cotización no disponible';$('usdUpdated').textContent='Comprueba tu conexión e inténtalo de nuevo.'}}
 $('refreshUsd').onclick=usd;
 $('installHelp').onclick=()=>alert('Para crear un acceso directo: abre este archivo con Chrome, toca ⋮ y elige “Añadir a pantalla principal” o “Instalar aplicación”, si aparece. Si lo abres como archivo local, esa opción puede no estar disponible; puedes guardarlo en una web de alojamiento para instalarlo como app.');
-applyLocale();refresh();usd();
+applyLocale();refresh();usd();loadCurrencyRates();
 
 const localeObserver = new MutationObserver(records => {
   if (countries[data.country].lang === 'es') return;
